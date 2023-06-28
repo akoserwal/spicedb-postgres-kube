@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  labels:
+    app: kube-prometheus-stack-grafana
+spec:
+  rules:
+    - host: grafana.127.0.0.1.nip.io
+      http:
+        paths:
+          - backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80
+            path: /
+            pathType: Prefix

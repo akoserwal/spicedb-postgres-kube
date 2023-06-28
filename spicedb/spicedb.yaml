@@ -1,0 +1,159 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicedb
+  labels:
+    app: spicedb
+spec:
+  selector:
+    matchLabels:
+      app: spicedb
+  template:
+    metadata:
+      labels:
+        app: spicedb
+    spec:
+      initContainers:
+        - name: spicedb-migrate
+          image: "authzed/spicedb"
+          imagePullPolicy: "IfNotPresent"
+          command: ["spicedb", "migrate", "head"]
+          env:
+            - name: "SPICEDB_DATASTORE_ENGINE"
+              value: "postgres"
+            - name: "SPICEDB_LOG_LEVEL"
+              value: "debug"
+            - name: "SPICEDB_DATASTORE_CONN_URI"
+              valueFrom:
+                secretKeyRef:
+                  name: "spicedb-datastore"
+                  key: "spicedb_datastore_conn_uri"
+      containers:
+        - name: spicedb
+          image: authzed/spicedb
+          args:
+            - serve
+          env:
+            - name: "SPICEDB_DATASTORE_ENGINE"
+              value: "postgres"
+            - name: "SPICEDB_GRPC_NO_TLS"
+              value: "true"
+            - name: "SPICEDB_HTTP_ENABLED"
+              value: "true"
+            - name: "SPICEDB_GRPC_SHUTDOWN_GRACE_PERIOD"
+              value: "1s"
+            - name: "SPICEDB_LOG_LEVEL"
+              value: "debug"
+            - name: "SPICEDB_DATASTORE_BOOTSTRAP_OVERWRITE"
+              value: "true"
+            - name: "SPICEDB_TELEMETRY_ENDPOINT"
+              value: ""
+            - name: "SPICEDB_GRPC_PRESHARED_KEY"
+              valueFrom:
+                secretKeyRef:
+                  name: "spicedb-preshared"
+                  key: "spicedbpresharedkey"
+            - name: "SPICEDB_DATASTORE_CONN_URI"
+              valueFrom:
+                secretKeyRef:
+                  name: "spicedb-datastore"
+                  key: "spicedb_datastore_conn_uri"
+          ports:
+            - containerPort: 50051
+            - containerPort: 8443
+            - containerPort: 9090
+  replicas: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicedb
+  labels:
+      job: spicedbsvc
+      app: spicedb
+spec:
+  selector:
+    app: spicedb
+  ports:
+    - name: grpc
+      port: 50051
+      protocol: TCP
+    - name: http
+      port: 8443
+      protocol: TCP
+    - name: "prometheus"
+      port: 9090
+      protocol: "TCP"
+      targetPort: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: spicedb-https
+  labels:
+    app: spicedb
+spec:
+  rules:
+    - host: spicedb-http.127.0.0.1.nip.io
+      http:
+        paths:
+          - backend:
+              service:
+                name: spicedb
+                port:
+                  number: 8443
+            path: /
+            pathType: Prefix
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: spicedb-prometheus
+  labels:
+    app: spicedb
+spec:
+  rules:
+    - host: spicedb-metric.127.0.0.1.nip.io
+      http:
+        paths:
+          - backend:
+              service:
+                name: spicedb
+                port:
+                  number: 9090
+            path: /
+            pathType: Prefix
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: spicedb-grpc
+  labels:
+    app: spicedb
+spec:
+  rules:
+    - host: spicedb-grpc.127.0.0.1.nip.io
+      http:
+        paths:
+          - backend:
+              service:
+                name: spicedb
+                port:
+                  number: 50051
+            path: /
+            pathType: Prefix
+---
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: spicedb
+spec:
+  virtualhost:
+    fqdn: spicedb-grpc.127.0.0.1.nip.io
+  routes:
+  - conditions:
+    - prefix: /
+    services:
+    - name: spicedb
+      port: 50051
+      protocol: h2c
